@@ -1,5 +1,6 @@
 import requests
-import time, json
+import time
+import json
 import csv
 import os
 from dotenv import load_dotenv
@@ -8,18 +9,17 @@ from dotenv import load_dotenv
 load_dotenv()
 API_KEY = os.getenv("API_KEY")
 
-# Taipei city boundaries (change for another city)
-CITY_CENTER_LAT = 25.0330 
+# Central Location (Taipei) - Change for different cities
+CITY_CENTER_LAT = 25.0330
 CITY_CENTER_LNG = 121.5654
-GRID_SIZE_KM = 5  # Each grid covers 5KM x 5KM
-MAX_RESULTS = 1000  # Target number of restaurants
-
-# Earth constants for distance calculation
-KM_IN_DEGREES = 1 / 111  # 1 degree latitude = ~111KM
+SEARCH_RADIUS = 5000  # Bigger radius to capture more restaurants
+GRID_SPACING = 0.05  # Adjust for better city coverage
+MAX_RESULTS = 10000  # Target up to 10,000 restaurants
+LOW_RATING_THRESHOLD = 2.6  # Only save restaurants with rating ≤ 2.6
 
 
 def get_restaurants(api_key, lat, lng, radius=5000):
-    """Fetch restaurants within a given 5KM radius using Google Places API."""
+    """Fetches restaurants in a given area using Google Places API."""
     url = "https://maps.googleapis.com/maps/api/place/nearbysearch/json"
     params = {
         "location": f"{lat},{lng}",
@@ -28,110 +28,99 @@ def get_restaurants(api_key, lat, lng, radius=5000):
         "key": api_key
     }
 
-    restaurants = []
-    while len(restaurants) < MAX_RESULTS:
+    low_rated_restaurants = {}  # Dictionary to store unique low-rated restaurants
+
+    while len(low_rated_restaurants) < MAX_RESULTS:
         try:
             response = requests.get(url, params=params)
             response.raise_for_status()
             data = response.json()
 
             if "results" in data:
-                restaurants.extend(data["results"])
+                for r in data["results"]:
+                    place_id = r.get("place_id")
+                    rating = r.get("rating", 5.0)  # Default to 5 if no rating
+
+                    # Filter low-rated restaurants (rating ≤ 2.6)
+                    if place_id and place_id not in low_rated_restaurants and rating <= LOW_RATING_THRESHOLD:
+                        low_rated_restaurants[place_id] = {
+                            "name": r.get("name", "Unknown"),
+                            "rating": rating,
+                            "address": r.get("vicinity", "N/A"),
+                            "url": f"https://www.google.com/maps/place/?q=place_id:{place_id}"
+                        }
 
             if "next_page_token" in data:
                 params["pagetoken"] = data["next_page_token"]
-                time.sleep(1.5)  # Google requires a delay before using next_page_token
+                time.sleep(2)  # Google requires a delay before using next_page_token
             else:
                 break
         except requests.exceptions.RequestException as e:
             print(f"Error fetching data: {e}")
-            time.sleep(5)  # Retry after 5 seconds in case of a network issue
-        else:
-            if len(restaurants) >= MAX_RESULTS:
-                break  # Stop once we reach MAX_RESULTS
+            time.sleep(5)  # Retry after 5 seconds if there's a network issue
 
-    return restaurants
+    return list(low_rated_restaurants.values())  # Return only low-rated restaurants
 
 
-def generate_grid(center_lat, center_lng, grid_size_km, num_cells=3):
-    """Generates grid coordinates to cover the city using 5KM x 5KM squares."""
-    grid = []
-    step = grid_size_km * KM_IN_DEGREES  # Convert KM to degrees
-
-    for i in range(-num_cells, num_cells + 1):
-        for j in range(-num_cells, num_cells + 1):
-            lat = center_lat + (i * step)
-            lng = center_lng + (j * step)
-            grid.append((lat, lng))
-
-    return grid
+def generate_grid(center_lat, center_lng, spacing, num_points=8):
+    """Generates a grid of search points around a central location."""
+    latitudes = [center_lat + (i - num_points//2) * spacing for i in range(num_points)]
+    longitudes = [center_lng + (i - num_points//2) * spacing for i in range(num_points)]
+    
+    grid_points = [(lat, lng) for lat in latitudes for lng in longitudes]
+    return grid_points
 
 
-def save_to_csv(restaurants, filename="restaurants.csv"):
+def save_to_csv(restaurants, filename):
     """Saves restaurant data to a CSV file."""
-    file_path = os.path.join(os.path.dirname(__file__), "data", filename)
+    os.makedirs("data", exist_ok=True)
+    file_path = os.path.join("data", filename)
+
     with open(file_path, mode="w", newline="", encoding="utf-8") as file:
         writer = csv.writer(file)
-        writer.writerow(["Name", "Rating", "Google Maps URL"])
+        writer.writerow(["Name", "Rating", "Address", "Google Maps URL"])
 
         for r in restaurants:
-            name = r.get("name", "Unknown")
-            rating = r.get("rating", "N/A")
-            place_id = r.get("place_id", "")
-            google_maps_url = f"https://www.google.com/maps/place/?q=place_id:{place_id}" if place_id else "N/A"
-
-            writer.writerow([name, rating, google_maps_url])
+            writer.writerow([r["name"], r["rating"], r["address"], r["url"]])
 
     print(f"✅ Data saved to {filename}")
 
-def save_to_json(user_data: dict, filename) -> None:
-    """Save the user data to the JSON file."""
-    file_path = os.path.join(os.path.dirname(__file__), "data", filename)
-    os.makedirs(os.path.dirname(file_path), exist_ok=True)
-    with open(file_path, "w", encoding="utf-8") as f:
-        json.dump(user_data, f, indent=4)
-    
-    print(f"Saved {len(user_data)} restaurants to {filename}")
 
-def filter_low_rated(restaurants, max_rating=2.5):
-    """Filters restaurants with ratings below the specified max_rating."""
-    return [
-        {
-            "name": r.get("name", "Unknown"),
-            "rating": r.get("rating", "N/A"),
-            "address": r.get("vicinity", "N/A"),
-            "url": f"https://www.google.com/maps/place/?q=place_id:{r.get('place_id', '')}"
-        }
-        for r in restaurants if "rating" in r and r["rating"] <= max_rating
-    ]
+def save_to_json(data, filename):
+    """Saves the restaurant data to a JSON file."""
+    os.makedirs("data", exist_ok=True)
+    file_path = os.path.join("data", filename)
+
+    with open(file_path, "w", encoding="utf-8") as f:
+        json.dump(data, f, indent=4)
+
+    print(f"✅ Data saved to {filename}")
+
 
 def main():
-    """Main function to fetch restaurants using a grid-based search."""
-    grid_points = generate_grid(CITY_CENTER_LAT, CITY_CENTER_LNG, GRID_SIZE_KM)
-    all_restaurants = []
+    """Main function to fetch and save restaurant data."""
+    print("🔍 Searching for low-rated restaurants in multiple locations...")
 
-    print(f"🔍 Searching in {len(grid_points)} grid sections...")
+    grid_points = generate_grid(CITY_CENTER_LAT, CITY_CENTER_LNG, GRID_SPACING, num_points=8)
+    
+    all_restaurants = {}  # Store unique low-rated restaurants
 
-    for idx, (lat, lng) in enumerate(grid_points):
-        print(f"📍 Searching area {idx + 1}/{len(grid_points)} at ({lat}, {lng})...")
-        restaurants = get_restaurants(API_KEY, lat, lng, radius=15000)
+    for lat, lng in grid_points:
+        print(f"📍 Searching in area: {lat}, {lng}")
+        restaurants = get_restaurants(API_KEY, lat, lng, SEARCH_RADIUS)
 
         for r in restaurants:
-            name = r.get("name", "Unknown")
-            rating = r.get("rating", "N/A")
-            print(f"   - {name} (⭐ {rating})")
+            all_restaurants[r["url"]] = r  # Avoid duplicates using URL as a unique key
 
-        all_restaurants.extend(restaurants)
+        print(f"📊 Total low-rated restaurants found so far: {len(all_restaurants)}")
 
         if len(all_restaurants) >= MAX_RESULTS:
-            break  # Stop once we reach 500 restaurants
+            break  # Stop if we reach the limit
 
-    save_to_json(all_restaurants, filename="all_restaurants.json")
-    save_to_csv(all_restaurants, filename="all_restaurants.csv")
+    final_restaurants = list(all_restaurants.values())
 
-    low_rated = filter_low_rated(all_restaurants, max_rating=2.6)
-    save_to_csv(low_rated, filename="low_rated_restaurants.csv")
-    save_to_json(low_rated, filename="low_rated_restaurants.json")
+    save_to_json(final_restaurants, filename="low_rated.json")
+    save_to_csv(final_restaurants, filename="low_rated.csv")
 
 
 if __name__ == "__main__":

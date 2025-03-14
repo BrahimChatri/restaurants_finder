@@ -39,7 +39,8 @@ test.py
 *.swn
 .DS_Store
 .vs/
-
+no_grid.py
+*csv
 # Local development settings
 *.env
 .env.local

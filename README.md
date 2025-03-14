@@ -1,7 +1,7 @@
 
 # Restaurant Rating Finder
 
-This Python script fetches restaurant data within a specified city and filters out restaurants with ratings below 2.5 using the Google Places API. The data is saved in both CSV and JSON formats for easy access and analysis.
+This Python script fetches restaurant data within a specified city and filters out restaurants with ratings below given rate using the Google Places API. The data is saved in both CSV and JSON formats for easy access and analysis.
 
 ## Features
 
